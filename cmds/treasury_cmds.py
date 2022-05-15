@@ -325,26 +325,3 @@ def estimate_rate_curve(model,CF,t_current,prices,x0=None):
     return params_optimized
 
 
-
-
-
-
-# def price_nelson_siegel(params,CF,t_current,fun,price_coupons=False):
-#     maturity = get_maturity_delta(CF.columns, t_current)
-    
-#     disc = np.zeros(maturity.shape)
-#     for i, mat in enumerate(maturity):
-#         disc[i] = intrate_to_discount(fun(params,mat),mat)
-    
-#     if price_coupons:
-#         price = CF * disc
-#     else:
-#         price = CF @ disc
-#     return price
-
-
-# def error_nelson_siegel(params):
-#     price_modeled = price_nelson_siegel(params,CF,t_current)
-#     error = sum((price_quoted - price_modeled)**2)
-    
-#     return error
