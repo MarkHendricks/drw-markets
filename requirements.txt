@@ -48,6 +48,7 @@ packaging==21.3
 pandas==1.4.2
 pandocfilters==1.5.0
 parso==0.8.3
+patsy==0.5.2
 pexpect==4.8.0
 pickleshare==0.7.5
 Pillow==9.1.0
@@ -75,6 +76,7 @@ sklearn==0.0
 soupsieve==2.3.2.post1
 SQLAlchemy==1.4.36
 stack-data==0.2.0
+statsmodels==0.13.2
 tabulate==0.8.9
 terminado==0.13.3
 threadpoolctl==3.1.0
