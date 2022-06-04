@@ -58,7 +58,7 @@ def make_figure_number_issues_paying(CFmatrix):
 
 
 
-def filter_treasuries(data, t_date=None, filter_maturity = None, filter_maturity_min=None, drop_duplicate_maturities = False, filter_tips=False, filter_yld=False):
+def filter_treasuries(data, t_date=None, filter_maturity = None, filter_maturity_min=None, drop_duplicate_maturities = False, filter_tips=True, filter_yld=True):
     outdata = data.copy()
     
     if t_date is None:
@@ -162,8 +162,6 @@ def get_maturity_delta(t_maturity,t_current):
 
 
 def discount_to_intrate(discount, maturity, n_compound=None):
-    
-    #intrate = discount[['maturity']]
         
     if n_compound is None:
         intrate = - np.log(discount) / maturity
@@ -177,8 +175,6 @@ def discount_to_intrate(discount, maturity, n_compound=None):
 
 
 def intrate_to_discount(intrate, maturity, n_compound=None):
-
-#    discount = intrate[['maturity']]
     
     if n_compound is None:
         discount = np.exp(-intrate * maturity)
@@ -189,14 +185,14 @@ def intrate_to_discount(intrate, maturity, n_compound=None):
 
 
 
-def compound_rate(intrate,compound_input,compound_output,maturity=1):
+def compound_rate(intrate,compound_input,compound_output):
     
 #    outrate = intrate[['maturity']]
     
     if compound_input is None:
-        outrate = maturity * (np.exp(intrate/maturity) - 1)
+        outrate = compound_output * (np.exp(intrate/compound_output) - 1)
     elif compound_output is None:
-        outrate = maturity * np.log(1 + intrate/maturity)
+        outrate = compound_input * np.log(1 + intrate/compound_input)
     else:
         outrate = ((1 + intrate/compound_input) ** (compound_input/compound_output) - 1) * compound_output
 
@@ -325,3 +321,156 @@ def estimate_rate_curve(model,CF,t_current,prices,x0=None):
     return params_optimized
 
 
+
+
+
+def extract_spot_curves(quote_date, filepath=None, model=nelson_siegel, delta_maturity = .25, T=30,calc_forward=False, delta_forward_multiple = 1, filter_maturity_dates=False):
+
+    if filepath is None:
+        filepath = f'../data/treasury_quotes_{quote_date}.xlsx'
+        
+    rawdata = pd.read_excel(filepath,sheet_name='quotes')
+    
+    rawdata.columns = rawdata.columns.str.upper()
+    rawdata.sort_values('TMATDT',inplace=True)
+    rawdata.set_index('KYTREASNO',inplace=True)
+
+    t_check = rawdata['CALDT'].values[0]
+    if rawdata['CALDT'].eq(t_check).all():
+        t_current = t_check
+    else:
+        warnings.warn('Quotes are from multiple dates.')
+        t_current = None
+
+    rawprices = (rawdata['TDBID'] + rawdata['TDASK'])/2 + rawdata['TDACCINT']
+    rawprices.name = 'price'
+
+    ###
+    data = filter_treasuries(rawdata, t_date=t_current)
+
+    CF = filter_treasury_cashflows(calc_cashflows(data),filter_maturity_dates=filter_maturity_dates)
+    prices = rawprices[CF.index]
+
+    ###
+    params = estimate_rate_curve(model,CF,t_current,prices)
+    
+    if model == nelson_siegel_extended:
+        params0 = estimate_rate_curve(nelson_siegel,CF,t_current,prices)
+        x0 = np.concatenate((params0,(1,1)))
+        params = estimate_rate_curve(model,CF,t_current,prices,x0=x0)
+        
+    else:
+        params = estimate_rate_curve(model,CF,t_current,prices)
+
+    ###
+    maturity_grid = np.arange(0,T+delta_maturity,delta_maturity)
+    maturity_grid[0] = .01
+    
+    curves = pd.DataFrame(index = pd.Index(maturity_grid,name='maturity'))
+    # adjust earliest maturity from 0 to epsion
+    curves.columns.name = quote_date
+    
+    curves['spot rate']= model(params,maturity_grid)
+
+    curves['spot discount'] = intrate_to_discount(curves['spot rate'].values,curves.index.values)
+    
+    
+    
+    if calc_forward:
+        delta_forward = delta_forward_multiple * delta_maturity
+        
+        curves['forward discount'] = curves['spot discount'] / curves['spot discount'].shift(delta_forward_multiple)
+
+        # first value of forward is spot rate
+        maturity_init = curves.index[0:delta_forward_multiple]
+        curves.loc[maturity_init,'forward discount'] = curves.loc[maturity_init,'spot discount']
+        
+        curves.insert(2,'forward rate', -np.log(curves['forward discount'])/delta_forward)
+        
+    return curves
+
+
+
+def process_treasury_quotes(quote_date):
+    
+    filepath_rawdata = f'../data/treasury_quotes_{quote_date}.xlsx'
+    rawdata = pd.read_excel(filepath_rawdata,sheet_name='quotes')
+    rawdata.columns = rawdata.columns.str.upper()
+    rawdata.sort_values('TMATDT',inplace=True)
+    rawdata.set_index('KYTREASNO',inplace=True)
+
+    t_check = rawdata['CALDT'].values[0]
+    if rawdata['CALDT'].eq(t_check).all():
+        t_current = t_check
+    else:
+        warnings.warn('Quotes are from multiple dates.')
+        t_current = None
+
+    rawprices = (rawdata['TDBID'] + rawdata['TDASK'])/2 + rawdata['TDACCINT']
+    rawprices.name = 'price'
+
+    maturity_delta = get_maturity_delta(rawdata['TMATDT'],t_current)
+    maturity_delta.name = 'maturity delta'
+
+    metrics = rawdata.copy()[['TDATDT','TMATDT','TDPUBOUT','TCOUPRT','TDYLD','TDDURATN']]
+    metrics.columns = ['issue date','maturity date','outstanding','coupon rate','yld','duration']
+    metrics['yld'] *= 365
+    metrics['duration'] /= 365
+    metrics['outstanding'] *= 1e6
+    metrics['maturity interval'] = get_maturity_delta(metrics['maturity date'], t_current)
+    metrics['price'] = rawprices
+    
+    return metrics
+
+
+def get_bond(quote_date,maturity=None,coupon=None,selection='nearest'):
+    
+    metrics = process_treasury_quotes(quote_date)
+
+    if coupon is not None:
+        metrics = metrics[metrics['coupon rate']==coupon]
+    
+    if maturity is not None:
+        mats = metrics['maturity interval']
+
+        if type(maturity) is float:
+            maturity = [maturity]
+
+        idx = list()
+
+        for m in maturity:
+
+            if selection == 'nearest':
+                idx.append(mats.sub(m).abs().idxmin())
+            elif selection == 'ceil':
+                idx.append(mats.sub(m).where(mats > 0, np.inf).argmin())
+            elif selection == 'floor':
+                idx.append(mats.sub(m).where(mats < 0, -np.inf).argmax())
+
+        metrics = metrics.loc[idx,:]
+
+    return metrics
+
+
+def get_bond_raw(quote_date):
+    
+    filepath_rawdata = f'../data/treasury_quotes_{quote_date}.xlsx'
+    rawdata = pd.read_excel(filepath_rawdata,sheet_name='quotes')
+    rawdata.columns = rawdata.columns.str.upper()
+    rawdata.sort_values('TMATDT',inplace=True)
+    rawdata.set_index('KYTREASNO',inplace=True)
+
+    t_check = rawdata['CALDT'].values[0]
+    if rawdata['CALDT'].eq(t_check).all():
+        t_current = t_check
+    else:
+        warnings.warn('Quotes are from multiple dates.')
+        t_current = None
+        
+    return rawdata, t_current
+
+
+
+
+def forward_discount(spot_discount,T1,T2):
+    return spot_discount.loc[T2] / spot_discount.loc[T1]
