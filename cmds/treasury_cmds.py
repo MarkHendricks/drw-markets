@@ -80,9 +80,7 @@ def filter_treasuries(data, t_date=None, filter_maturity = None, filter_maturity
         mask_truncate = outdata['TMATDT'] > (t_date + np.timedelta64(365*filter_maturity_min-1,'D'))
         outdata = outdata[mask_truncate]
 
-
-    if filter_tips:
-        outdata = outdata[outdata['ITYPE'].isin([11,12]) == False]
+    outdata = outdata[outdata['ITYPE'].isin([11,12]) == (not filter_tips)]
         
     if filter_yld:
         outdata = outdata[outdata['TDYLD']>0]
@@ -324,7 +322,7 @@ def estimate_rate_curve(model,CF,t_current,prices,x0=None):
 
 
 
-def extract_spot_curves(quote_date, filepath=None, model=nelson_siegel, delta_maturity = .25, T=30,calc_forward=False, delta_forward_multiple = 1, filter_maturity_dates=False):
+def extract_spot_curves(quote_date, filepath=None, model=nelson_siegel, delta_maturity = .25, T=30,calc_forward=False, delta_forward_multiple = 1, filter_maturity_dates=False, filter_tips=True):
 
     if filepath is None:
         filepath = f'../data/treasury_quotes_{quote_date}.xlsx'
@@ -346,7 +344,7 @@ def extract_spot_curves(quote_date, filepath=None, model=nelson_siegel, delta_ma
     rawprices.name = 'price'
 
     ###
-    data = filter_treasuries(rawdata, t_date=t_current)
+    data = filter_treasuries(rawdata, t_date=t_current, filter_tips=filter_tips)
 
     CF = filter_treasury_cashflows(calc_cashflows(data),filter_maturity_dates=filter_maturity_dates)
     prices = rawprices[CF.index]
@@ -474,3 +472,13 @@ def get_bond_raw(quote_date):
 
 def forward_discount(spot_discount,T1,T2):
     return spot_discount.loc[T2] / spot_discount.loc[T1]
+
+
+
+def calc_npv(rate=0, cashflows=0, maturities=0, price=0):
+        
+    temp = cashflows.copy()
+    val = sum([cfi/(1+rate)**(maturities[i]) for i, cfi in enumerate(temp)])
+    val += - price
+
+    return val
