@@ -91,3 +91,68 @@ def clean_options(calls_raw,puts_raw):
     puts['lastTradeDate'] = puts['lastTradeDate'].dt.tz_localize(None)
     
     return calls, puts
+
+
+
+
+
+
+def treeUnder(start,T,Nt,sigma=None,u=None,d=None):
+
+    dt = T/Nt
+    Ns = Nt+1
+    
+    if u is None:
+        u = np.exp(sigma * np.sqrt(dt))
+        d = np.exp(-sigma * np.sqrt(dt))
+        
+    grid = np.empty((Ns,Nt+1))
+    grid[:] = np.nan
+    
+    tree = pd.DataFrame(grid)
+    
+    for t in tree.columns:
+        for s in range(0,t+1):
+            tree.loc[s,t] = start * (d**s * u**(t-s))
+
+    treeinfo = pd.Series({'u':u,'d':d,'Nt':Nt,'dt':dt}).T
+            
+    return tree, treeinfo
+
+
+
+
+def treeAsset(funPayoff, treeUnder,treeInfo, Z=None, pstar=None, style='european'):
+    treeV = pd.DataFrame(np.nan,index= list(range(int(treeInfo.Nt+1))),columns= list(range(int(treeInfo.Nt+1))))
+    
+    if style=='american':
+        treeExer = treeV.copy()
+    
+    for t in reversed(treeV.columns):
+        if t ==treeV.columns[-1]:
+            for s in treeV.index:
+                treeV.loc[s,t] = funPayoff(treeUnder.loc[s,t]) 
+                if style=='american':
+                    if treeV.loc[s,t]>0:
+                        treeExer.loc[s,t] = True
+                    else:
+                        treeExer.loc[s,t] = False
+                    
+        else:
+            probvec = [pstar[t-1],1-pstar[t-1]]
+
+            for s in treeV.index[:-1]:        
+                treeV.loc[s,t] = Z[t-1] * treeV.loc[[s,s+1],t+1] @ probvec
+                
+                if style=='american':
+                    exerV = funPayoff(treeUnder.loc[s,t])
+                    if exerV > treeV.loc[s,t]:
+                        treeExer.loc[s,t] = True
+                        treeV.loc[s,t] = exerV
+                    else:
+                        treeExer.loc[s,t] = False
+
+    if style=='american':
+        return treeV, treeExer
+    else:
+        return treeV
