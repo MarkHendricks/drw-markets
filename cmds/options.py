@@ -1,8 +1,10 @@
 import math
 import numpy as np
 from scipy.optimize import fsolve
+from scipy.stats import norm
 import datetime
 import pandas as pd
+import matplotlib.pyplot as plt
 
 def normal_cdf(x):
     return(1 + math.erf(x/np.sqrt(2)))/2
@@ -156,3 +158,125 @@ def treeAsset(funPayoff, treeUnder,treeInfo, Z=None, pstar=None, style='european
         return treeV, treeExer
     else:
         return treeV
+    
+    
+    
+    
+def bs_delta_to_strike(under,delta,sigma,T,isCall=True,r=0):
+    
+    if isCall:
+        phi = 1
+    else:
+        phi = -1
+        if delta > 0:
+            delta *= -1
+        
+    strike = under * np.exp(-phi * norm.ppf(phi*delta) * sigma * np.sqrt(T) + .5*sigma**2*T)
+    
+    return strike
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+### Auxiliary Functions for Handling Nasdaq Skew Data
+def load_vol_surface(LOADFILE,SHEET):
+
+    info = pd.read_excel(LOADFILE,sheet_name='descriptions').set_index('specs')
+    labels = info.columns
+
+    if type(SHEET) == int or type(SHEET) == float:
+        lab = labels[SHEET]
+    else:
+        lab = SHEET
+        
+    raw = pd.read_excel(LOADFILE,sheet_name=lab).set_index('Date')
+
+    ts = raw.loc[:,['Future Price','Expiration Future','Expiration Option']]
+    surf = raw.drop(columns=ts.columns)
+
+    indPuts = surf.columns.str.contains('P')
+    indCalls = surf.columns.str.contains('C')
+
+    calls = surf[surf.columns[indCalls]]
+    puts = surf[surf.columns[indPuts]]
+
+    return ts, puts
+
+
+
+def get_notable_dates(opts, ts, maxdiff=False):
+
+    if maxdiff==True:
+        dtgrid = pd.DataFrame([opts.diff().abs().idxmax()[0], ts[['Future Price']].diff().abs().idxmax()[0]],columns=['notable date'],index=['max curve shift','max underlying shift'])
+    else:
+        dtgrid = pd.DataFrame([opts.diff().abs().idxmax()[0], ts[['Future Price']].pct_change().abs().idxmax()[0]],columns=['notable date'],index=['max curve shift','max underlying shift'])
+    for row in dtgrid.index:
+        dtgrid.loc[row,'day before'] = opts.loc[:dtgrid.loc[row, 'notable date'],:].index[-2]
+    dtgrid = dtgrid.iloc[:,::-1].T
+    
+    return dtgrid
+    
+    
+    
+    
+    
+    
+def get_strikes_from_vol_moneyness(TYPE,opts,ts):
+
+    if TYPE == 'call':
+            phi = 1
+            isCall = True
+    else:
+        phi =-1
+        isCall = False
+
+    deltas = pd.DataFrame(np.array([float(col[1:3])/100 for col in opts.columns]) * phi, index=opts.columns,columns = ['delta'])
+
+    strikes = pd.DataFrame(index=opts.index, columns=opts.columns, dtype=float)
+    for t in opts.index:
+        T = ts.loc[t,'Expiration Option']
+        for col in deltas.index:
+            strikes.loc[t,col] = bs_delta_to_strike(under = ts.loc[t,'Future Price'], delta=deltas.loc[col,'delta'], sigma=opts.loc[t,col], T=T, isCall=isCall)
+            
+            
+    return strikes
+
+
+
+
+
+
+def graph_vol_surface_as_strikes(dtgrid,opts,strikes,ts,label):
+
+    fig, ax = plt.subplots(2,1,figsize=(10,10))
+
+    for j, dt in enumerate(dtgrid.columns):
+
+        colorgrid = ['b','r','g']
+
+        for i, tstep in enumerate(dtgrid[dt]):
+            tstep = tstep.strftime('%Y-%m-%d')
+            plotdata = pd.concat([opts.loc[tstep,:],strikes.loc[tstep,:]],axis=1)
+            plotdata.columns = [tstep,'strike']
+            plotdata.set_index('strike',inplace=True)
+            plotdata.plot(ax=ax[j],color=colorgrid[i]);
+
+            ax[j].axvline(x=ts.loc[tstep,'Future Price'],color=colorgrid[i],linestyle='--')
+
+            if j==0:        
+                ax[j].set_title(f'Curve shock: {label}')
+            elif j==1:
+                ax[j].set_title(f'Underlying shock: {label}')
+
+            if label.split(' ')[-2] == 'ED':
+                ax[j].set_xlim(xmin=0,xmax=.08)
+            
+            plt.tight_layout()
+
